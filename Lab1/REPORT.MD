@@ -3,7 +3,7 @@
 **The OS as a Resource Manager** (Track A: the real OS, from the outside, Linux)
 
 **Elaborated by:** Morari Veaceslav, FAF-243
-
+**Verified by:** Patricia Reţman
 
 ## Contents
 

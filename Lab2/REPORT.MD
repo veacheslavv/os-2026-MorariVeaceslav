@@ -2,7 +2,8 @@
 
 **Meet the OS You Will Build** (Track B: Build Your Own Small OS, xv6)
 
-**Elaborated by:**  Morari Veaceslav, FAF-243
+**Elaborated by:** Morari Veaceslav, FAF-243
+**Verified by:** Patricia Reţman
 
 ---
 
@@ -166,7 +167,7 @@ A new user program, `sleep`, was added. It pauses for a number of clock ticks (o
 
 ### 6.1. Source Code
 
-The file `user/sleep.c` was created. Because the name of the system call differs between versions of xv6, the program includes `kernel/syscall.h`, the list of system call numbers, and chooses the right call at compile time: if `SYS_pause` exists it calls `pause()`, otherwise the older `sleep()`. In this way the same file builds on both the new and the old xv6.
+The file `user/sleep.c` was created. Because the name of the system call differs between versions of xv6, the program includes `kernel/syscall.h`, the list of system call numbers, and chooses the right call at compile time: if `SYS_pause` exists it calls `pause()`, otherwise the older `sleep()`. In this way the same file builds on both the new and the old xv6. The source is available in [`sleep.c`](./sleep.c).
 
 ```c
 #include "kernel/types.h"
