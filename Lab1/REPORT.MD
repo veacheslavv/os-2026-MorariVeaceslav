@@ -2,12 +2,8 @@
 
 **The OS as a Resource Manager** (Track A: the real OS, from the outside, Linux)
 
-**Elaborated by:** st. gr. FAF-243, Morari Veaceslav
-**Verified by:** Dumitrascu Marius
-**Institution:** Universitatea Tehnică a Moldovei, Facultatea Calculatoare, Informatică și Microelectronică, Program: Software Engineering
-**Place and year:** Chișinău, 2026
+**Elaborated by:** Morari Veaceslav, FAF-243
 
----
 
 ## Contents
 
@@ -87,16 +83,9 @@ chmod 644 note.txt
 
 1. The files created during the experiment were owned by user `veacheslavv` and belonged to group `veacheslavv`. The OS automatically makes the user who creates a file its owner.
 
-2. After executing `chmod 600 note.txt`, the file permissions became `-rw-------`.
-   - The first character, `-`, indicates that `note.txt` is a regular file (a directory would show `d`).
-   - The next three characters, `rw-`, indicate that the owner can read and write the file but cannot execute it.
-   - The following `---` indicates that members of the group have no permissions, and the final `---` indicates that other users also have no permissions.
-   - The number 600 is these rights in octal: read = 4, write = 2, execute = 1, so the owner gets 4 + 2 = 6, and the group and others get 0.
-   - After `chmod 644` the permissions became `-rw-r--r--` again, so everyone could read the file.
+2. After executing `chmod 600 note.txt`, the file permissions became `-rw-------`. The first character, `-`, indicates that `note.txt` is a regular file (a directory would show `d`). The next three characters, `rw-`, indicate that the owner can read and write the file but cannot execute it. The following `---` indicates that members of the group have no permissions, and the final `---` indicates that other users also have no permissions. The number 600 is these rights in octal: read = 4, write = 2, execute = 1, so the owner gets 4 + 2 = 6, and the group and others get 0. After `chmod 644` the permissions became `-rw-r--r--` again, so everyone could read the file.
 
-3. Two directories directly under the root directory `/` are:
-   - `/etc`, which contains system-wide configuration files (for example `apt`, `adduser.conf`, `bash.bashrc`);
-   - `/home`, which contains users' home directories (mine is `/home/veacheslavv`).
+3. Two directories directly under the root directory `/` are `/etc`, which contains system-wide configuration files (for example `apt`, `adduser.conf`, `bash.bashrc`), and `/home`, which contains users' home directories (mine is `/home/veacheslavv`).
 
 ### 3.2. Interesting Command Output
 
