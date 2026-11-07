@@ -1,0 +1,241 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[english]{babel}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{needspace}
+\usepackage[hidelinks]{hyperref}
+
+\titleformat{\section}{\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection.}{0.5em}{}
+
+\definecolor{codebg}{gray}{0.96}
+\lstset{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{codebg},
+    frame=single,
+    rulecolor=\color{gray!40},
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    upquote=true,
+    aboveskip=8pt,
+    belowskip=8pt
+}
+
+\setlist[enumerate]{itemsep=6pt}
+\setlength{\emergencystretch}{3em}
+
+\begin{document}
+
+\begin{titlepage}
+    \centering
+    Ministerul Educa\c{t}iei \c{s}i Cercet\u{a}rii al Republicii Moldova\\[0.4cm]
+    \textbf{Universitatea Tehnic\u{a} a Moldovei}\\[0.4cm]
+    Facultatea Calculatoare, Informatic\u{a} \c{s}i Microelectronic\u{a}\\[0.2cm]
+    Program: Software Engineering
+
+    \vspace{3cm}
+
+    {\LARGE \textbf{Operating Systems}}
+
+    \vspace{1.2cm}
+
+    {\Large \textbf{Laboratory Work No. 7}}\\[0.6cm]
+    {\LARGE \textbf{Three Small Programs}}\\[0.3cm]
+    Track A: The Real OS, from the Outside (Linux)
+
+    \vspace{3cm}
+
+    \begin{flushright}
+        \textbf{Elaborated by:}\\
+        st. gr. FAF-243\\
+        Veacheslav Morari\\[0.6cm]
+        \textbf{Verified by:}\\
+        Patricia Re\c{t}man
+    \end{flushright}
+
+    \vfill
+    Chi\c{s}in\u{a}u -- 2026
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section*{Introduction}
+\addcontentsline{toc}{section}{Introduction}
+
+The lecture on processes raised three questions: how a process is born, where \texttt{printf} writes, and how \texttt{ls | wc -l} works. The purpose of this laboratory work is to answer them with running code. Four small C programs are written and compiled on Linux: \texttt{run.c} shows \texttt{fork} + \texttt{exec} + \texttt{wait} at work, \texttt{zombie.c} makes a visible zombie process, \texttt{redirect.c} performs output redirection with \texttt{close} + \texttt{open} + \texttt{exec}, and \texttt{pipeline.c} builds a pipeline by hand with \texttt{pipe} + \texttt{fork} + \texttt{dup2}. The work was done on Ubuntu 26.04 using the system compiler \texttt{gcc}.
+
+\section{run.c}
+
+The program does what the shell does when the user types \texttt{ls -l}: it copies itself with \texttt{fork}, the copy becomes \texttt{ls} with \texttt{exec}, and the original waits for it with \texttt{waitpid}.
+
+\begin{lstlisting}[language=C]
+pid_t pid = fork();
+if (pid < 0) { perror("fork"); exit(1); }
+
+if (pid == 0) {
+    printf("child: pid=%d, parent=%d\n", getpid(), getppid());
+    execlp("ls", "ls", "-l", NULL);
+    perror("exec");
+    exit(1);
+}
+
+printf("parent: pid=%d, child=%d\n", getpid(), pid);
+int status;
+waitpid(pid, &status, 0);
+if (WIFEXITED(status))
+    printf("parent: child exited with %d\n", WEXITSTATUS(status));
+\end{lstlisting}
+
+After compiling with \texttt{gcc -Wall -o run run.c}, the run printed the expected lines:
+
+\begin{lstlisting}
+$ ./run
+parent: pid=4928, child=4929
+child: pid=4929, parent=4928
+total 96
+drwxrwxr-x 2 veacheslav veacheslav  4096 Nov  2 15:31 Lab7
+drwxrwxr-x 2 veacheslav veacheslav  4096 Nov  2 15:31 Lab8
+-rw-rw-r-- 1 veacheslav veacheslav   562 Nov  7 20:43 run.c
+-rwxrwxr-x 1 veacheslav veacheslav 16304 Nov  7 20:43 run
+...
+parent: child exited with 0
+\end{lstlisting}
+
+\subsection{Observations}
+
+\texttt{fork()} returns the child's PID in the parent and 0 in the child, which is how each one knows which process it is. In my run the parent had PID 4928 and the child 4929, and the child's \texttt{getppid()} indeed printed 4928, confirming that the two processes are related as parent and child. After \texttt{execlp} the child never comes back to the C code; the only line that would run after it is \texttt{perror("exec")}, and that runs only if \texttt{exec} failed. The parent's \texttt{waitpid} call is what keeps the child's exit status from being lost: without it, the child would stay as a zombie, which is the subject of the next part.
+
+\section{zombie.c}
+
+A zombie is a child that has ended but whose exit status has not yet been collected. The experiment makes one on purpose by adding \texttt{sleep(20);} just before \texttt{waitpid}, so that the parent delays the collection for 20 seconds while the child has already finished.
+
+\begin{lstlisting}[language=C]
+printf("parent: pid=%d, child=%d\n", getpid(), pid);
+sleep(20);                /* <-- the only new line */
+int status;
+waitpid(pid, &status, 0);
+\end{lstlisting}
+
+The program was started in the background with \texttt{./zombie \&}, and the process table was inspected two seconds later:
+
+\begin{lstlisting}
+$ ./zombie & sleep 2 && ps -o pid,ppid,stat,cmd
+[1] 4952
+parent: pid=4952, child=4954
+child: pid=4954, parent=4952
+...listing...
+    PID    PPID STAT CMD
+   4833    4773 Ss   /usr/bin/bash
+   4952    4833 S    ./zombie
+   4954    4952 Z    [ls] <defunct>
+   4957    4833 R+   ps -o pid,ppid,stat,cmd
+\end{lstlisting}
+
+The last line is the zombie: PID 4954, parent 4952, state \texttt{Z}, labelled \texttt{[ls] <defunct>}. After the 20 seconds elapsed the parent reached \texttt{waitpid}, the exit status was collected, and the zombie disappeared from the process table.
+
+\subsection{Observations}
+
+A zombie takes no CPU and no memory of its own, only a tiny slot in the kernel's process table so that the parent can still read the exit status. The parent's job is to call \texttt{wait} or \texttt{waitpid}. If the parent dies first, PID 1 (systemd on this system) adopts the child and reaps it, so an orphan does not stay as a zombie for long. The experiment also shows that a child can run to completion long before the parent notices, which is why real servers that fork many children often install a \texttt{SIGCHLD} handler to reap them as soon as they finish.
+
+\section{redirect.c}
+
+The program implements what the shell does for \texttt{ls -l > out.txt}: in the child it closes descriptor 1, opens the file (which, by the rule of the smallest free number, receives descriptor 1), then runs \texttt{ls}.
+
+\begin{lstlisting}[language=C]
+if (pid == 0) {
+    close(1);
+    int fd = open("out.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) { perror("open"); exit(1); }
+    execlp("ls", "ls", "-l", NULL);
+    perror("exec");
+    exit(1);
+}
+waitpid(pid, NULL, 0);
+\end{lstlisting}
+
+Running the program printed nothing on the screen; the file \texttt{out.txt} contained the full \texttt{ls -l} listing:
+
+\begin{lstlisting}
+$ ./redirect && cat out.txt
+total 92
+drwxrwxr-x 2 veacheslav veacheslav  4096 Nov  2 15:31 Lab7
+drwxrwxr-x 2 veacheslav veacheslav  4096 Nov  2 15:31 Lab8
+-rw-r--r-- 1 veacheslav veacheslav     0 Nov  7 20:45 out.txt
+-rwxrwxr-x 1 veacheslav veacheslav 16208 Nov  7 20:45 redirect
+-rw-rw-r-- 1 veacheslav veacheslav   477 Nov  7 20:45 redirect.c
+...
+\end{lstlisting}
+
+\subsection{Observations}
+
+\texttt{ls} has no idea that it is writing into a file. It writes to file descriptor 1 as always, except that descriptor 1 now points at \texttt{out.txt}. The redirection is set up entirely by the parent program before \texttt{exec}, which is exactly what the shell does when it sees \texttt{>}. This is why \texttt{fork} and \texttt{exec} are two separate calls in UNIX: the gap between them is where the child can reconfigure its own file descriptors without touching the program that is about to replace it.
+
+The trick relies on the kernel rule that \texttt{open} always returns the smallest free descriptor. After \texttt{close(1)}, descriptor 1 is free; the next \texttt{open} call gets exactly it. If descriptor 0 had been closed instead, the file would have become standard input, not output.
+
+\section{pipeline.c}
+
+The program builds the pipeline \texttt{ls | wc -l} by hand: one \texttt{pipe}, two \texttt{fork}s. In \texttt{ls}, descriptor 1 becomes the writing end \texttt{p[1]}; in \texttt{wc}, descriptor 0 becomes the reading end \texttt{p[0]}. Both children close every pipe descriptor they do not need, and the parent closes both ends before waiting.
+
+\begin{lstlisting}[language=C]
+int p[2];
+pipe(p);
+
+pid_t ls = fork();
+if (ls == 0) {
+    close(p[0]);
+    dup2(p[1], 1);
+    close(p[1]);
+    execlp("ls", "ls", NULL);
+    perror("exec ls");
+    exit(1);
+}
+
+pid_t wc = fork();
+if (wc == 0) {
+    close(p[1]);
+    dup2(p[0], 0);
+    close(p[0]);
+    execlp("wc", "wc", "-l", NULL);
+    perror("exec wc");
+    exit(1);
+}
+
+close(p[0]);
+close(p[1]);
+waitpid(ls, NULL, 0);
+waitpid(wc, NULL, 0);
+\end{lstlisting}
+
+The run printed \texttt{12}, the same number as \texttt{ls | wc -l} in the real shell:
+
+\begin{lstlisting}
+$ ./pipeline && echo "--- real shell: ---" && ls | wc -l
+12
+--- real shell: ---
+12
+\end{lstlisting}
+
+When the line \texttt{close(p[1]);} in the parent was commented out, \texttt{wc} never ended and the program hung until \texttt{Ctrl-C}.
+
+\subsection{Observations}
+
+A pipe is a kernel buffer with two ends: \texttt{p[1]} to write, \texttt{p[0]} to read. The \texttt{read()} call on the reading end returns 0 (EOF) only when every writing end is closed. If the parent still holds \texttt{p[1]} open, the kernel cannot deliver EOF, and \texttt{wc} waits forever. The rule of thumb is simple: after \texttt{fork} and \texttt{dup2}, close every pipe descriptor that the process does not plan to use.
+
+The second observation is that the three processes --- \texttt{ls}, \texttt{wc} and the parent --- run concurrently. \texttt{ls} starts writing as soon as it has output; \texttt{wc} starts reading as soon as there is data in the pipe. If \texttt{ls} produces more than the pipe buffer can hold, the kernel pauses it until \texttt{wc} reads some data. This back-pressure is handled entirely by the kernel, and neither program needs to know about it.
+
+\section*{Conclusion}
+\addcontentsline{toc}{section}{Conclusion}
+
+The four programs showed what the shell actually does under the hood: \texttt{fork} + \texttt{exec} + \texttt{wait} to start a command, \texttt{close} + \texttt{open} between \texttt{fork} and \texttt{exec} for redirection, and \texttt{pipe} + two \texttt{fork}s + \texttt{dup2} + \texttt{close} for a pipeline. The idea that joins all three is the gap between \texttt{fork} and \texttt{exec}: the child inherits the parent's descriptors, can rearrange them freely, and only then becomes the new program. The experiments with the zombie and the forgotten \texttt{close} made two common failure modes visible, which is useful preparation for debugging real multi-process programs.
+
+\end{document}
