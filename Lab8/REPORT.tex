@@ -1,0 +1,176 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[english]{babel}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{needspace}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+
+\titleformat{\section}{\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection.}{0.5em}{}
+
+\definecolor{codebg}{gray}{0.96}
+\lstset{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{codebg},
+    frame=single,
+    rulecolor=\color{gray!40},
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    upquote=true,
+    aboveskip=8pt,
+    belowskip=8pt
+}
+
+\setlist[enumerate]{itemsep=6pt}
+\setlength{\emergencystretch}{3em}
+
+\begin{document}
+
+\begin{titlepage}
+    \centering
+    Ministerul Educa\c{t}iei \c{s}i Cercet\u{a}rii al Republicii Moldova\\[0.4cm]
+    \textbf{Universitatea Tehnic\u{a} a Moldovei}\\[0.4cm]
+    Facultatea Calculatoare, Informatic\u{a} \c{s}i Microelectronic\u{a}\\[0.2cm]
+    Program: Software Engineering
+
+    \vspace{3cm}
+
+    {\LARGE \textbf{Operating Systems}}
+
+    \vspace{1.2cm}
+
+    {\Large \textbf{Laboratory Work No. 8}}\\[0.6cm]
+    {\LARGE \textbf{The Same Calls Inside Your Own OS}}\\[0.3cm]
+    Track B: Build Your Own Small OS (xv6)
+
+    \vspace{3cm}
+
+    \begin{flushright}
+        \textbf{Elaborated by:}\\
+        st. gr. FAF-243\\
+        Veacheslav Morari\\[0.6cm]
+        \textbf{Verified by:}\\
+        Patricia Re\c{t}man
+    \end{flushright}
+
+    \vfill
+    Chi\c{s}in\u{a}u -- 2026
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section*{Introduction}
+\addcontentsline{toc}{section}{Introduction}
+
+In Laboratory Work No. 7 the three calls \texttt{fork}, \texttt{exec} and \texttt{wait} were used on Linux through \texttt{glibc}. The purpose of this laboratory work is to run the same calls inside xv6, the small operating system that is being extended throughout the course, and to see that they behave the same way. The work consists of two programs: \texttt{user/run.c}, which mirrors \texttt{run.c} from Lab 7, and \texttt{user/pingpong.c}, in which two processes exchange one byte through a pair of pipes. Both programs were added to the \texttt{UPROGS} list in the \texttt{Makefile} and compiled with the rest of xv6.
+
+\section{run.c for xv6}
+
+The program forks a child, prints its PID, calls \texttt{exec} on \texttt{echo}, and the parent waits for the child and prints its exit status. The structure matches \texttt{run.c} from Lab 7; only the API differs.
+
+\begin{lstlisting}[language=C]
+#include "kernel/types.h"
+#include "user/user.h"
+
+int
+main(void)
+{
+    int pid = fork();
+    if (pid < 0) { fprintf(2, "fork failed\n"); exit(1); }
+
+    if (pid == 0) {
+        printf("child: pid=%d\n", getpid());
+        char *args[] = {"echo", "hello from exec", 0};
+        exec("echo", args);
+        fprintf(2, "exec failed\n");
+        exit(1);
+    }
+
+    printf("parent: child=%d\n", pid);
+    int status;
+    wait(&status);
+    printf("parent: child exited with %d\n", status);
+    exit(0);
+}
+\end{lstlisting}
+
+After adding \texttt{\$U/\_run\textbackslash} to \texttt{UPROGS} and rebuilding with \texttt{make clean \&\& make qemu}, the program produced the following output inside xv6, shown in Figure \ref{fig:run}.
+
+\section{pingpong.c}
+
+Two processes exchange a single byte through a pair of pipes. The parent writes a byte into the first pipe; the child reads it, prints \texttt{<pid>: received ping}, writes the byte back through the second pipe and exits; the parent reads it, prints \texttt{<pid>: received pong}, and waits for the child.
+
+\begin{lstlisting}[language=C]
+#include "kernel/types.h"
+#include "user/user.h"
+
+int
+main(void)
+{
+    int p1[2], p2[2];
+    pipe(p1); pipe(p2);
+
+    int pid = fork();
+    if (pid == 0) {
+        char b;
+        close(p1[1]); close(p2[0]);
+        read(p1[0], &b, 1);
+        printf("%d: received ping\n", getpid());
+        write(p2[1], &b, 1);
+        close(p1[0]); close(p2[1]);
+        exit(0);
+    }
+
+    char b = 'x';
+    close(p1[0]); close(p2[1]);
+    write(p1[1], &b, 1);
+    read(p2[0], &b, 1);
+    printf("%d: received pong\n", getpid());
+    close(p1[1]); close(p2[0]);
+    wait(0);
+    exit(0);
+}
+\end{lstlisting}
+
+After adding \texttt{\$U/\_pingpong\textbackslash} to \texttt{UPROGS} and rebuilding, \texttt{pingpong} ran in xv6 and printed the expected two lines, visible in Figure \ref{fig:run}.
+
+\section{Combined Output}
+
+Figure \ref{fig:run} shows both programs running one after the other in a single xv6 session.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{screenshots/fig1.1_run_and_pingpong.png}
+    \caption{Running \texttt{run} and \texttt{pingpong} inside xv6 on 3 harts. The first line of \texttt{run}'s output shows the parent's \texttt{"parent: child=4"} and the child's \texttt{"child: pid=4"} interleaved character by character, because both processes run concurrently on different harts and write to the same terminal.}
+    \label{fig:run}
+\end{figure}
+
+\subsection{Observations on run}
+
+The three calls \texttt{fork}, \texttt{exec} and \texttt{wait} behave the same as on Linux. The small differences are in the API: xv6 \texttt{exec} takes an \emph{array} of arguments ending with \texttt{0}, not the variadic list of \texttt{execlp}; xv6 \texttt{wait(\&status)} takes only one argument and waits for any child, there is no \texttt{waitpid}; error reporting goes to file descriptor 2 with \texttt{fprintf(2, \dots)}, a library helper that wraps \texttt{write}. The lines after a successful \texttt{exec} are never executed, so the \texttt{fprintf(2, "exec failed\textbackslash n")} line runs only when \texttt{exec} failed, which is also the Linux behaviour.
+
+The most interesting observation comes from the first line of Figure \ref{fig:run}. The parent prints \texttt{parent: child=4\textbackslash n} and the child prints \texttt{child: pid=4\textbackslash n}, but what actually appears on the terminal is \texttt{parent:ch cihilld: pid=4\textbackslash nd=4}. The two strings are interleaved character by character. This happens because xv6 runs on three harts (\texttt{-smp 3}), the parent and the child are scheduled on different harts and both call \texttt{printf}, which eventually calls \texttt{write(1, \dots, 1)} once per character. The kernel serves these writes in the order they arrive, and the hardware delivers them intermixed. On a single hart (\texttt{make qemu CPUS=1}) the same program prints two clean lines, because the two processes cannot execute at the same time.
+
+\subsection{Observations on pingpong}
+
+The child prints \texttt{received ping} first because the data flow decides the order: the child cannot continue past \texttt{read(p1[0], \&b, 1)} until the parent has written one byte into \texttt{p1[1]}. No explicit synchronisation is needed; the pipe provides it.
+
+One pipe is not enough. A pipe is unidirectional: \texttt{p[1]} is the writing end and \texttt{p[0]} is the reading end. To send a byte in both directions, two pipes are needed, one for each direction. The same rule as in Lab 7 applies here: every process closes the pipe ends it does not use, otherwise \texttt{read} would never return EOF and the other side would block forever.
+
+\section*{Conclusion}
+\addcontentsline{toc}{section}{Conclusion}
+
+The three calls \texttt{fork}, \texttt{exec} and \texttt{wait} appear inside xv6 with the same meaning and almost the same signatures as on Linux. The \texttt{run} program is a line-for-line translation of its Linux counterpart, and it behaves the same, while also exposing the real concurrency of xv6: the interleaved first line of its output is direct evidence that the parent and the child are executing at the same time on different harts. The pingpong experiment showed that two processes can coordinate purely through pipes, without ever sharing memory: the kernel buffer is the only channel between them, and its EOF behaviour synchronises the two sides. The small operating system I am building this semester already supports all the pieces that drive the pipelines I type in bash every day.
+
+\end{document}
