@@ -1,0 +1,213 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[english]{babel}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{needspace}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+
+\titleformat{\section}{\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection.}{0.5em}{}
+
+\definecolor{codebg}{gray}{0.96}
+\lstset{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{codebg},
+    frame=single,
+    rulecolor=\color{gray!40},
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    upquote=true,
+    aboveskip=8pt,
+    belowskip=8pt
+}
+
+\setlist[enumerate]{itemsep=6pt}
+\setlength{\emergencystretch}{3em}
+
+\begin{document}
+
+\begin{titlepage}
+    \centering
+    Ministerul Educa\c{t}iei \c{s}i Cercet\u{a}rii al Republicii Moldova\\[0.4cm]
+    \textbf{Universitatea Tehnic\u{a} a Moldovei}\\[0.4cm]
+    Facultatea Calculatoare, Informatic\u{a} \c{s}i Microelectronic\u{a}\\[0.2cm]
+    Program: Software Engineering
+
+    \vspace{3cm}
+
+    {\LARGE \textbf{Operating Systems}}
+
+    \vspace{1.2cm}
+
+    {\Large \textbf{Laboratory Work No. 13}}\\[0.6cm]
+    {\LARGE \textbf{Add Semaphores to xv6}}\\[0.3cm]
+    Track B: Build Your Own Small OS (xv6)
+
+    \vspace{3cm}
+
+    \begin{flushright}
+        \textbf{Elaborated by:}\\
+        st. gr. FAF-243\\
+        Veacheslav Morari\\[0.6cm]
+        \textbf{Verified by:}\\
+        Patricia Re\c{t}man
+    \end{flushright}
+
+    \vfill
+    Chi\c{s}in\u{a}u -- 2026
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section*{Introduction}
+\addcontentsline{toc}{section}{Introduction}
+
+In Lab 10 I added one system call (\texttt{trace}) to xv6. In Lab 11 and 12 I used \texttt{sem\_init} / \texttt{sem\_wait} / \texttt{sem\_post} from the Linux pthread library without ever thinking about what happens inside. This laboratory work closes the loop: three new xv6 system calls --- \texttt{sem\_init}, \texttt{sem\_down}, \texttt{sem\_up} --- implemented from scratch, with a small table of eight semaphores inside the kernel and a user-side test that demonstrates the two classic uses: forcing an order between parent and child, and protecting a shared resource (the terminal) from interleaving. The complete diff is in \texttt{sem.patch}, the kernel implementation is in \texttt{kernel/sem.c}, and the two test programs are \texttt{user/semtest.c} and \texttt{user/mix.c}.
+
+\section{The numbers, the stubs, the Makefile}
+
+The first part is pure plumbing: give each new call a number, declare it on the user side, add the stub that performs \texttt{ecall}, and put the two test programs on the xv6 disk. Five files touched.
+
+\textbf{1.1 kernel/syscall.h --- three new numbers.} Lab 10 ended at 23, so the next free slots are 24, 25, 26:
+
+\begin{lstlisting}[language=C]
+#define SYS_sem_init    24       // Lab 13
+#define SYS_sem_down    25       // Lab 13
+#define SYS_sem_up      26       // Lab 13
+\end{lstlisting}
+
+\textbf{1.2 user/user.h --- the declarations.} Three prototypes after the existing \texttt{trace}:
+
+\begin{lstlisting}[language=C]
+int sem_init(int, int);         // sem_init(idx, value)
+int sem_down(int);              // P (wait)
+int sem_up(int);                // V (signal)
+\end{lstlisting}
+
+\textbf{1.3 user/usys.pl --- the ecall stubs.} At build time this Perl script writes \texttt{user/usys.S} containing \texttt{li a7, SYS\_sem\_init; ecall; ret} for each entry:
+
+\begin{lstlisting}
+entry("sem_init");             # Lab 13
+entry("sem_down");             # Lab 13
+entry("sem_up");               # Lab 13
+\end{lstlisting}
+
+\textbf{1.4 Makefile.} Two edits: the kernel object \texttt{\$K/sem.o} is added to the \texttt{OBJS} list, and the two user programs \texttt{\_semtest} and \texttt{\_mix} are added to \texttt{UPROGS} so that \texttt{mkfs} places them on the xv6 filesystem image.
+
+\textbf{Check 1.} Before touching the kernel side, running \texttt{semtest} from the xv6 shell gives the expected error:
+
+\begin{lstlisting}
+$ semtest
+3 semtest: unknown sys call 24
+sem_init(0) failed
+\end{lstlisting}
+
+The number 3 is the pid of \texttt{semtest}, and ``unknown sys call 24'' is printed by the dispatcher because \texttt{syscalls[24]} is \texttt{NULL}. That is the proof that the user side works: the stub fired \texttt{ecall} with \texttt{a7 = 24}, the kernel caught it, and refused only because the dispatch table has no entry for that number yet. The user-side plumbing is complete.
+
+\section{The kernel side}
+
+The second part adds the three handlers and the dispatch-table entries. The core of the work is the new file \texttt{kernel/sem.c}.
+
+\textbf{2.1 kernel/sem.c --- the table and three handlers.} Inside the kernel, the eight semaphores live in a small static table, each with a \texttt{value}, a spinlock to protect that value, and an \texttt{inited} flag so uninitialised slots can be rejected. The spinlock is the serialisation primitive that guards the semaphore's own state --- exactly the same role the pthread library's internal lock plays inside glibc.
+
+\begin{lstlisting}[language=C]
+#define NSEM 8
+struct {
+  struct spinlock lock;
+  int value;
+  int inited;
+} sem[NSEM];
+\end{lstlisting}
+
+\textbf{2.2 sys\_sem\_down --- the P operation.} The handler reads the index from register \texttt{a0}, acquires the semaphore's spinlock, and runs the classic P loop:
+
+\begin{lstlisting}[language=C]
+while (sem[idx].value <= 0) {
+  sleep_prepare(&sem[idx]);     // register as waiter on channel
+  release(&sem[idx].lock);      // let other threads run
+  sleep();                      // actually block
+  acquire(&sem[idx].lock);      // wake up and re-check
+}
+sem[idx].value--;
+release(&sem[idx].lock);
+\end{lstlisting}
+
+Three details are worth stating explicitly. The check uses \texttt{while} and not \texttt{if}, because by the time \texttt{sleep()} returns another thread may have decremented the value before this thread re-acquires the lock. The \texttt{sleep\_prepare / release / sleep} sequence is xv6's atomic sleep primitive: \texttt{sleep\_prepare} registers the current process as waiting on a channel, then the spinlock is released, then \texttt{sleep()} actually sets the process to \texttt{SLEEPING} and yields. The ordering is important: if the spinlock were released before \texttt{sleep\_prepare}, a concurrent \texttt{wakeup(\&sem[idx])} could be missed (the ``lost wakeup'' problem). The address of the semaphore itself serves as the wait channel.
+
+\textbf{2.3 sys\_sem\_up --- the V operation.} The increment and the wake-up happen under the same spinlock:
+
+\begin{lstlisting}[language=C]
+acquire(&sem[idx].lock);
+sem[idx].value++;
+wakeup(&sem[idx]);              // wake all threads waiting on this channel
+release(&sem[idx].lock);
+\end{lstlisting}
+
+\texttt{wakeup} walks the process table and marks every process with \texttt{chan == \&sem[idx]} as \texttt{RUNNABLE}. Only one of them will succeed on the next iteration of the P loop (the others see the value back at 0 and go back to sleep); this is a \emph{thundering herd} and is acceptable here because the semaphore table is small and the wait lists are short. A production implementation would keep a per-semaphore wait queue and wake exactly one waiter.
+
+\textbf{2.4 kernel/syscall.c --- the dispatch table.} Three \texttt{extern} declarations and three table entries connect the numbers to the handlers. The syscall-names array is also extended so trace output names the calls:
+
+\begin{lstlisting}[language=C]
+[SYS_sem_init] = sys_sem_init,
+[SYS_sem_down] = sys_sem_down,
+[SYS_sem_up]   = sys_sem_up,
+\end{lstlisting}
+
+\textbf{Check 2.} After rebuilding, \texttt{semtest} passes:
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.75\textwidth]{screenshots/fig2.1_semtest.png}
+    \caption{\texttt{semtest}: Part A forces the child to run after the parent via one semaphore starting at 0; Part B is a ping-pong of three exchanges via two semaphores (\texttt{sem[1]} starts at 1 for the parent's turn, \texttt{sem[2]} at 0 for the child's turn). The strict alternation \texttt{ping 0, pong 0, ping 1, pong 1, ping 2, pong 2} proves the two sides never both hold the ``turn''.}
+    \label{fig:semtest}
+\end{figure}
+
+In Part A, the child is forked almost immediately, but it blocks inside \texttt{sem\_down(0)} because the semaphore starts at 0. The parent \texttt{pause(10)} gives the child enough time to go to sleep in the kernel, then the parent prints and calls \texttt{sem\_up(0)}; the kernel's \texttt{wakeup} moves the child back to \texttt{RUNNABLE}, the child's \texttt{while (value <= 0)} sees the value at 1, decrements it and returns.
+
+In Part B, two semaphores form an alternating lock: only one of parent and child holds the right to print at a time. The parent starts (because \texttt{sem[1]} is 1), prints ``ping 0'' and passes the turn to the child by posting \texttt{sem[2]}; the child, which was blocked on \texttt{sem\_down(2)}, wakes, prints ``pong 0'' and posts \texttt{sem[1]}, passing back. Six exchanges, no interleaving.
+
+\section{Mutual exclusion in xv6}
+
+The third part shows that the same semaphore is a correct mutex for xv6 user processes. \texttt{user/mix.c} forks and then both parent and child each print three rows of twenty characters (the parent prints \texttt{A}, the child prints \texttt{b}). Without any synchronisation, xv6's round-robin scheduler slices into the middle of the rows:
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.75\textwidth]{screenshots/fig3.1_mix_nolock.png}
+    \caption{\texttt{mix} with no lock: every row contains a mix of A and b; the newlines of one process cut the output of the other at arbitrary positions.}
+    \label{fig:mix-nolock}
+\end{figure}
+
+The reason is that \texttt{row()} calls \texttt{write(1, \&c, 1)} 21 times (20 letters plus one newline), and between any two \texttt{write}s the scheduler is free to pick the other process. The terminal driver appends to its line buffer in call order, so the letters interleave exactly as the two processes were scheduled.
+
+Running the same program with the \texttt{1} argument makes it initialise \texttt{sem[0]} to 1 and wrap each row in \texttt{sem\_down(0) / sem\_up(0)}, turning the semaphore into a binary mutex that protects the whole row:
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.75\textwidth]{screenshots/fig3.2_mix_lock.png}
+    \caption{\texttt{mix 1}: six clean rows, three of A and three of b. The semaphore keeps the whole row of 20 writes inside one critical section.}
+    \label{fig:mix-lock}
+\end{figure}
+
+\subsection{Observations}
+
+The semaphore does not change how the scheduler slices time --- it still switches processes between individual \texttt{write} calls --- but inside the critical section, the other process cannot progress past its own \texttt{sem\_down(0)}, so its \texttt{write}s do not reach the terminal until the current row and its newline are done. This is the same argument as the \texttt{counter++} race from Lab 11, lifted one level up: an operation that looks atomic to a programmer (``print a row'') is really a sequence of smaller operations (``write each character''), and the semaphore is what makes the whole sequence appear atomic to the other process.
+
+The choice of starting value is what makes \texttt{sem[0]} a mutex: 1 means ``one process may be inside at a time''. The same code with \texttt{sem[0]} initialised to 2 would admit both processes at once and reproduce the mixing --- the number in \texttt{sem\_init} tells the kernel the \emph{capacity}, and 1 is the specific capacity that makes a semaphore equivalent to a mutex.
+
+\section*{Conclusion}
+\addcontentsline{toc}{section}{Conclusion}
+
+Adding semaphores to xv6 followed the same path as Lab 10's \texttt{trace}: three new numbers in \texttt{syscall.h}, three prototypes and stubs on the user side, three handlers and a dispatch entry on the kernel side, plus one new C file for the primitive itself. The kernel implementation is only about 90 lines but it ties together three xv6 subsystems: the spinlock that serialises access to the semaphore's own value, the process table that holds the wait channel, and the sleep / wakeup pair that puts processes to sleep and brings them back. The \texttt{semtest} program showed that the primitive can enforce an order and that two semaphores can hand a turn back and forth, and \texttt{mix} showed that it is a correct mutex for user-level mutual exclusion --- the terminal races visible without it disappear with one semaphore. The pthread calls I used blindly in Lab 11 and 12 now have a body: \texttt{sem\_wait} in glibc does the same \texttt{while (value <= 0) \{ atomic; block; \}} loop, over a \texttt{futex} instead of xv6's \texttt{sleep} channel, but the idea is identical. This is the last laboratory work of the semester; the three labs 11--13 together close the concurrency arc that opened with Lab 1's single-threaded shell.
+
+\end{document}

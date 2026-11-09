@@ -1,0 +1,56 @@
+## Lab 13 patch — the five hook-up edits
+## applied on top of Lab 10 (which already added SYS_trace = 23)
+
+--- a/kernel/syscall.h
++++ b/kernel/syscall.h
+@@ -22,3 +22,6 @@
+ #define SYS_sync   22
+ #define SYS_trace        23       // new
++#define SYS_sem_init    24       // Lab 13
++#define SYS_sem_down    25       // Lab 13
++#define SYS_sem_up      26       // Lab 13
+
+--- a/user/user.h
++++ b/user/user.h
+@@ -28,3 +28,6 @@
+ int trace(int);                // new
++int sem_init(int, int);         // Lab 13: sem_init(idx, value)
++int sem_down(int);              // Lab 13: P (wait)
++int sem_up(int);                // Lab 13: V (signal)
+
+--- a/user/usys.pl
++++ b/user/usys.pl
+@@ -43,0 +44,3 @@
+ entry("trace");                # new
++entry("sem_init");             # Lab 13
++entry("sem_down");             # Lab 13
++entry("sem_up");               # Lab 13
+
+--- a/Makefile
++++ b/Makefile
+@@ -20,0 +21,1 @@
+   $K/sysproc.o \
++  $K/sem.o \
+
+@@ UPROGS block
+   $U/_sync\
++  $U/_semtest\
++  $U/_mix\
+
+--- a/kernel/syscall.c
++++ b/kernel/syscall.c
+@@ -106,0 +107,3 @@
+ extern uint64 sys_trace(void);
++extern uint64 sys_sem_init(void);
++extern uint64 sys_sem_down(void);
++extern uint64 sys_sem_up(void);
+
+@@ -137,0 +138,3 @@
+ [SYS_trace]   = sys_trace,
++[SYS_sem_init] = sys_sem_init,
++[SYS_sem_down] = sys_sem_down,
++[SYS_sem_up]   = sys_sem_up,
+
+@@ -152,0 +153,1 @@
+    [SYS_sync] "sync",   [SYS_trace] "trace",
++   [SYS_sem_init] "sem_init", [SYS_sem_down] "sem_down", [SYS_sem_up] "sem_up",

@@ -1,0 +1,206 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[english]{babel}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{needspace}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+
+\titleformat{\section}{\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection.}{0.5em}{}
+
+\definecolor{codebg}{gray}{0.96}
+\lstset{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{codebg},
+    frame=single,
+    rulecolor=\color{gray!40},
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    upquote=true,
+    aboveskip=8pt,
+    belowskip=8pt
+}
+
+\setlist[enumerate]{itemsep=6pt}
+\setlength{\emergencystretch}{3em}
+
+\begin{document}
+
+\begin{titlepage}
+    \centering
+    Ministerul Educa\c{t}iei \c{s}i Cercet\u{a}rii al Republicii Moldova\\[0.4cm]
+    \textbf{Universitatea Tehnic\u{a} a Moldovei}\\[0.4cm]
+    Facultatea Calculatoare, Informatic\u{a} \c{s}i Microelectronic\u{a}\\[0.2cm]
+    Program: Software Engineering
+
+    \vspace{3cm}
+
+    {\LARGE \textbf{Operating Systems}}
+
+    \vspace{1.2cm}
+
+    {\Large \textbf{Laboratory Work No. 11}}\\[0.6cm]
+    {\LARGE \textbf{Introduction to Threads and Semaphores}}\\[0.3cm]
+    Track A: The Real OS, from the Outside (Linux)
+
+    \vspace{3cm}
+
+    \begin{flushright}
+        \textbf{Elaborated by:}\\
+        st. gr. FAF-243\\
+        Veacheslav Morari\\[0.6cm]
+        \textbf{Verified by:}\\
+        Patricia Re\c{t}man
+    \end{flushright}
+
+    \vfill
+    Chi\c{s}in\u{a}u -- 2026
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section*{Introduction}
+\addcontentsline{toc}{section}{Introduction}
+
+The previous laboratory works put programs next to each other but never really let them share memory. Threads change that: two threads of the same process read and write the same variables at the same time, and almost nothing about the C language prepares a beginner for what happens next. The purpose of this laboratory work is to see the race condition with my own eyes, to fix it twice --- once with a mutex, once with a binary semaphore --- and then to use a counting semaphore for two different jobs that a mutex cannot do: imposing an order between two threads and limiting a shared resource. The work was done on Ubuntu 26.04 with \texttt{gcc} and \texttt{pthreads}, the five programs are \texttt{race.c}, \texttt{mutex.c}, \texttt{sem.c}, \texttt{order.c} and \texttt{parking.c}.
+
+\section{The race}
+
+The first program, \texttt{race.c}, starts two threads that each increment a shared counter \texttt{N = 1\,000\,000} times. The expected final value is 2$\cdot$N = 2\,000\,000. The program was compiled without optimisation so the race is clearly visible:
+
+\begin{lstlisting}
+$ gcc -Wall -pthread -O0 -o race race.c
+$ ./race
+counter = 1086985   (expected 2000000)
+$ ./race
+counter = 1223230   (expected 2000000)
+$ ./race
+counter = 1764889   (expected 2000000)
+\end{lstlisting}
+
+Figure \ref{fig:race} captures one of the runs.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{screenshots/fig1.1_race.png}
+    \caption{\texttt{./race} printed 1\,086\,985 instead of 2\,000\,000. Almost half of the increments were lost.}
+    \label{fig:race}
+\end{figure}
+
+The reason is that \texttt{counter++} is not one machine instruction but three: load the current value from memory into a register, add one, store the register back to memory. If thread A loads 42, is preempted, thread B loads the same 42, adds one, writes 43, then A adds one to its old 42 and writes 43 again, one increment is silently lost. On two cores running at the same time the story is the same without any preemption. The lower the compiler optimisation and the simpler the loop body, the more preemptions happen inside the critical three-step sequence, and the worse the final count becomes.
+
+\section{Two ways to stop the race}
+
+The way to stop the race is to make the three steps happen with no interleaving. Two primitives do this: a mutex (\texttt{mutex.c}) and a binary semaphore (\texttt{sem.c}).
+
+\subsection{Mutex}
+
+\texttt{pthread\_mutex\_lock(\&m)} blocks until no other thread owns the mutex, then takes ownership. \texttt{unlock} releases it. Only the owner can hold the lock at any instant, so the three steps of \texttt{counter++} cannot be interleaved by another thread. After rebuilding and running:
+
+\begin{lstlisting}
+$ ./mutex
+counter = 2000000   (expected 2000000)
+\end{lstlisting}
+
+Figure \ref{fig:mutex} shows the correct result.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{screenshots/fig2.1_mutex.png}
+    \caption{With the mutex, the final count matches the expectation on every run.}
+    \label{fig:mutex}
+\end{figure}
+
+\subsection{Semaphore initialised to 1}
+
+A semaphore with initial value 1 behaves exactly like a mutex: the first \texttt{sem\_wait} decrements it from 1 to 0 and passes, a concurrent \texttt{sem\_wait} blocks until the holder calls \texttt{sem\_post}, which increments back to 1. \texttt{sem.c} uses this pattern:
+
+\begin{lstlisting}
+$ ./sem
+counter = 2000000   (expected 2000000)
+\end{lstlisting}
+
+Figure \ref{fig:sem} shows the output.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{screenshots/fig2.2_sem.png}
+    \caption{Binary semaphore (initial value 1) used as a mutex gives the same correct count.}
+    \label{fig:sem}
+\end{figure}
+
+\subsection{Cost comparison}
+
+The three programs take wildly different time because two of them pay for a system call on every increment. Measured with \texttt{time}:
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{screenshots/fig2.3_time_comparison.png}
+    \caption{\texttt{time} for the three programs. The race finishes in a few milliseconds (it does nothing useful); \texttt{mutex} takes tens of milliseconds because \texttt{pthread\_mutex\_lock} fast-paths an atomic operation in userspace; \texttt{sem} is the slowest because every \texttt{sem\_wait/post} can enter the kernel through \texttt{futex}.}
+    \label{fig:time}
+\end{figure}
+
+The mutex is the right tool for simple mutual exclusion because it is designed exactly for that one job and takes the fast path when there is no contention. The semaphore is slower because its counter and its wake-up machinery do more work than needed for a two-state lock. The right conclusion is not that one is ``better'' but that each has its purpose, and sections 3 and 4 show what the semaphore does that the mutex cannot.
+
+\section{The semaphore as a signal}
+
+\texttt{order.c} uses a semaphore for a job that mutexes do not do at all: forcing thread B to continue only after thread A has finished a specific step. The semaphore starts at 0. Thread B does \texttt{sem\_wait(\&ready)} and blocks immediately because the value is 0 (and blocking is not an error --- it is the whole point). Thread A sleeps for a second, writes the shared buffer, prints its own line, and does \texttt{sem\_post(\&ready)}, which wakes B up. B reads the buffer \emph{after} A wrote it:
+
+\begin{lstlisting}
+B: waiting...
+A: wrote 'hello'
+B: read 'hello'
+\end{lstlisting}
+
+Figure \ref{fig:order} shows the sequence.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{screenshots/fig3.1_order_normal.png}
+    \caption{Normal run: B waits, A writes, B reads the message. The order is enforced by the semaphore.}
+    \label{fig:order}
+\end{figure}
+
+Changing the third argument of \texttt{sem\_init} from 0 to 1 and rebuilding breaks the order: B passes \texttt{sem\_wait} without blocking (the value is 1, it goes to 0 and the call returns), reads the buffer before A has written anything, and prints an empty string.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{screenshots/fig3.2_order_start1.png}
+    \caption{\texttt{sem\_init(\&ready, 0, 1)}: B does not wait and reads the empty buffer.}
+    \label{fig:order1}
+\end{figure}
+
+This shows the semaphore in its ``signal'' role: it is a one-way message from A to B. No mutex can do this because a mutex has only two states, locked and unlocked, both symmetric, and it cannot start locked by a thread that is not even running yet.
+
+\section{The semaphore as a resource counter}
+
+The last program, \texttt{parking.c}, uses a semaphore for its third role: counting a bounded resource. Six cars (threads) want to park in a lot with three spaces. The semaphore \texttt{spaces} is initialised to 3 and counts the number of free places. Each car does \texttt{sem\_wait(\&spaces)} on arrival (take a space; block if none left), parks for one second, and \texttt{sem\_post(\&spaces)} on leaving (release the space). A small mutex protects a plain counter \texttt{inside} so that the printed value is always consistent.
+
+Figure \ref{fig:parking} shows a run.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{screenshots/fig4.1_parking.png}
+    \caption{6 cars, 3 places. The first three park at once; cars 4, 5 and 6 wait until the earlier cars leave. The counter \texttt{inside} never exceeds 3.}
+    \label{fig:parking}
+\end{figure}
+
+The property to notice is that \texttt{inside} is printed only inside the critical section protected by the mutex, and it is never more than 3 --- the semaphore guarantees this before the mutex ever gets involved. The semaphore here is not a lock and not a signal: it is a budget. When the budget is exhausted (\texttt{spaces == 0}), the next \texttt{sem\_wait} blocks; when some other thread releases, one of the waiters wakes up and proceeds.
+
+\section*{Conclusion}
+\addcontentsline{toc}{section}{Conclusion}
+
+The experiments showed three faces of the same primitive. A race condition between two threads is not a rare bug but the default outcome of unprotected shared state: half of the increments were silently dropped. A mutex and a binary semaphore both close the race by serialising the critical section, but they do so with slightly different cost and intent --- the mutex is the standard tool for mutual exclusion, cheaper because it does less. A counting semaphore does two more things no mutex can: it imposes an order between threads by starting at 0 and being posted by the thread that finishes first, and it limits a shared resource by starting at the capacity and tracking the number of free units. All three programs that use semaphores shared one line: \texttt{sem\_init(\&s, 0, N)} --- the number \texttt{N} on the right turned the same primitive into a mutex (\texttt{N = 1}), a signal (\texttt{N = 0}) or a counter (\texttt{N = capacity}). This flexibility is why semaphores remain a core synchronisation primitive thirty years after their introduction, and why the next laboratory work reaches for them again when more subtle ordering is needed.
+
+\end{document}

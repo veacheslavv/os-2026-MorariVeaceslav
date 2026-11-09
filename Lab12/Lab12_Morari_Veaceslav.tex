@@ -1,0 +1,159 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[english]{babel}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{needspace}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+
+\titleformat{\section}{\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection.}{0.5em}{}
+
+\definecolor{codebg}{gray}{0.96}
+\lstset{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{codebg},
+    frame=single,
+    rulecolor=\color{gray!40},
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    upquote=true,
+    aboveskip=8pt,
+    belowskip=8pt
+}
+
+\setlist[enumerate]{itemsep=6pt}
+\setlength{\emergencystretch}{3em}
+
+\begin{document}
+
+\begin{titlepage}
+    \centering
+    Ministerul Educa\c{t}iei \c{s}i Cercet\u{a}rii al Republicii Moldova\\[0.4cm]
+    \textbf{Universitatea Tehnic\u{a} a Moldovei}\\[0.4cm]
+    Facultatea Calculatoare, Informatic\u{a} \c{s}i Microelectronic\u{a}\\[0.2cm]
+    Program: Software Engineering
+
+    \vspace{3cm}
+
+    {\LARGE \textbf{Operating Systems}}
+
+    \vspace{1.2cm}
+
+    {\Large \textbf{Laboratory Work No. 12}}\\[0.6cm]
+    {\LARGE \textbf{Synchronisation Patterns}}\\[0.3cm]
+    Producer--Consumer, Condition Variables, Readers--Writers, Deadlock\\[0.3cm]
+    Track A: The Real OS, from the Outside (Linux)
+
+    \vspace{3cm}
+
+    \begin{flushright}
+        \textbf{Elaborated by:}\\
+        st. gr. FAF-243\\
+        Veacheslav Morari\\[0.6cm]
+        \textbf{Verified by:}\\
+        Patricia Re\c{t}man
+    \end{flushright}
+
+    \vfill
+    Chi\c{s}in\u{a}u -- 2026
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section*{Introduction}
+\addcontentsline{toc}{section}{Introduction}
+
+Lab 11 showed one primitive (the semaphore) in three roles: mutex, signal and counter. This laboratory work combines those roles to build the classical patterns of concurrent programming: a bounded buffer shared between a producer and a consumer, a condition variable to wait for a predicate on shared state, the reader / writer protocol that lets many readers share data but gives writers exclusive access, and finally the textbook deadlock that teaches \emph{why} the order in which locks are taken is a property of the whole program, not of a single thread. The four programs are \texttt{prodcons.c}, \texttt{condvar.c}, \texttt{readers.c} and \texttt{deadlock.c} (plus \texttt{deadlock\_fixed.c}), all built on Ubuntu 26.04 with \texttt{gcc -pthread}.
+
+\section{Producer and consumer}
+
+\texttt{prodcons.c} has a ring buffer with \texttt{SIZE = 4} slots, one producer and one consumer, and three synchronisation primitives: two counting semaphores and one mutex. \texttt{empty} starts at \texttt{SIZE} and counts free slots; \texttt{full} starts at 0 and counts filled slots; \texttt{mutex} protects the ring indices \texttt{head} and \texttt{tail}. The producer does \texttt{sem\_wait(\&empty)} (take a free slot, block if none), fills the slot under the mutex, and \texttt{sem\_post(\&full)} (announce a new item). The consumer does the mirror: \texttt{sem\_wait(\&full)}, pull the item, \texttt{sem\_post(\&empty)}.
+
+The producer sleeps 0.1\,s between items and the consumer 0.3\,s, so the producer runs ahead until the buffer fills to its capacity, 4. At that point the next \texttt{sem\_wait(\&empty)} blocks the producer until the consumer removes one item. Figure \ref{fig:prodcons} captures this: the first four \texttt{put} lines fill the buffer to 4, then every \texttt{take} is followed by one \texttt{put} (buffer oscillates between 3 and 4), and once all 8 items have been produced the consumer drains the tail in rapid succession.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{screenshots/fig1.1_prodcons.png}
+    \caption{Producer--consumer with a buffer of 4. The producer blocks after \texttt{put 4}, then the consumer and producer alternate; once production stops, the consumer drains the buffer down to 0.}
+    \label{fig:prodcons}
+\end{figure}
+
+\subsection{Observations}
+
+Three primitives are needed and not two, because the three jobs are distinct. \texttt{empty} and \texttt{full} carry the two signals (free-slot-available and item-available) and are each used from one side only, so they never conflict. The mutex protects the ring buffer indices, which are shared read-write by both threads. Collapsing any two of them loses a property: without the mutex, the two indices can move inconsistently; without \texttt{empty} the producer would overwrite slots that have not been consumed; without \texttt{full} the consumer would read from empty slots. Note that \texttt{empty} is waited on by the producer and posted by the consumer (and the reverse for \texttt{full}): the producer and consumer talk to each other through the semaphore values, not directly.
+
+\section{Condition variables}
+
+\texttt{condvar.c} solves the same ordering problem as \texttt{order.c} from Lab 11 (B reads \emph{after} A writes) but with a condition variable instead of a signal semaphore. A condition variable always goes with a mutex. Thread B holds the mutex, checks the predicate \texttt{ready} and, if the predicate is false, calls \texttt{pthread\_cond\_wait(\&cv, \&m)}. That call atomically releases the mutex and goes to sleep. Thread A locks the mutex, sets the predicate, calls \texttt{pthread\_cond\_signal(\&cv)} and releases the mutex; B wakes up, reacquires the mutex, rechecks the predicate and continues.
+
+Figure \ref{fig:condvar} shows the run.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{screenshots/fig2.1_condvar.png}
+    \caption{B prints ``not ready, I sleep'', A later prints ``message written'', B wakes up and reads the message.}
+    \label{fig:condvar}
+\end{figure}
+
+\subsection{Observations}
+
+Two details decide whether a condition-variable program is correct. First, the predicate check is \texttt{while (!ready)} and not \texttt{if (!ready)}. \texttt{pthread\_cond\_wait} is allowed to return without a matching signal (a \emph{spurious wakeup}) and it will if another thread wakes several waiters at once; the \texttt{while} loop sends the thread back to sleep in that case. Second, the mutex must be held both when checking the predicate \emph{and} when setting it, otherwise B can observe the predicate as false, A can set it and signal, and B can go to sleep without noticing --- a classic ``lost wakeup''. A signal semaphore does not have the spurious-wakeup problem because its value is a stored, counted thing; the condition variable trades that for the ability to wait for any predicate, not just ``a thing happened once''.
+
+\section{Readers and writers}
+
+\texttt{readers.c} implements the reader-preference variant of the readers / writers problem. The protocol is: many readers may hold the data at the same time (they do not modify it, so there is no race), but a writer must hold it alone. Two primitives are used. \texttt{rlock} is an ordinary mutex that protects the integer counter \texttt{rcount} (number of readers currently inside). \texttt{wlock} is a binary semaphore that admits either one writer or the whole reader group. The first reader does \texttt{sem\_wait(\&wlock)} (locks writers out) and the last reader does \texttt{sem\_post(\&wlock)} (lets a waiting writer in); intermediate readers just bump the counter under \texttt{rlock}.
+
+The test timing (\texttt{sleep} between thread creations) was chosen so that writer 1 arrives first, then three readers arrive while writer 1 still works, and writer 2 arrives only after all readers are gone.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{screenshots/fig3.1_readers.png}
+    \caption{writer 1 alone, three readers simultaneously (readers inside: 1, 2, 3), writer 2 alone.}
+    \label{fig:readers}
+\end{figure}
+
+\subsection{Observations}
+
+The simultaneity of the three readers is the whole point: with a plain mutex instead of the ``first reader locks, last reader unlocks'' pattern, every reader would serialise and three readers would take three times as long for no reason. The pattern comes at a price: writers can starve. If new readers keep arriving faster than the last one leaves, \texttt{rcount} never reaches 0 and \texttt{wlock} is never posted, so any waiting writer never gets in. Writer-preference variants exist that solve this by keeping a \texttt{writer-is-waiting} flag or an extra semaphore; this program uses the simpler reader-preference form.
+
+\section{Deadlock and its fix}
+
+\texttt{deadlock.c} creates the textbook deadlock: two threads, two mutexes \texttt{A} and \texttt{B}, taken in opposite orders. Thread \texttt{one} locks \texttt{A}, sleeps 1 second, then asks for \texttt{B}; thread \texttt{two} locks \texttt{B}, sleeps 1 second, then asks for \texttt{A}. Because of the sleep, by the time each thread asks for its second mutex, the other thread is already holding it. Each waits for the other to let go, forever. The program is killed by \texttt{timeout 5 ./deadlock}, which sends SIGTERM after 5 seconds; the shell reports exit code 124.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{screenshots/fig4.1_deadlock_broken.png}
+    \caption{Broken version: ``one: I have A, I want B'' and ``two: I have B, I want A'' print, nothing else, and \texttt{timeout} kills the program (\texttt{exit code: 124}).}
+    \label{fig:deadlock-broken}
+\end{figure}
+
+The fix is to ensure both threads take the mutexes in the same order --- any order, as long as it is the same. Here both threads now lock \texttt{A} first, then \texttt{B}. The fixed program runs in about one second and prints the expected ``done'':
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{screenshots/fig4.2_deadlock_fixed.png}
+    \caption{After applying lock ordering (both threads take A first, then B), the program completes with \texttt{exit code: 0}.}
+    \label{fig:deadlock-fixed}
+\end{figure}
+
+\subsection{Observations}
+
+Four conditions must all hold for a deadlock to occur (the classical Coffman conditions): mutual exclusion (resources cannot be shared --- true for mutexes), hold-and-wait (a thread holding one resource asks for another), no preemption (the OS cannot pull a mutex away from its owner) and circular wait (a cycle in the ``waits-for'' graph). Breaking any one condition is enough; lock ordering breaks the circular wait because taking locks in a global order makes the ``waits-for'' graph a DAG, which cannot have cycles. Removing the \texttt{sleep(1)} would not fix the bug: the deadlock would just become non-deterministic, appearing randomly in production instead of always in testing. That is strictly worse --- a bug you can reproduce is a bug you can fix.
+
+\section*{Conclusion}
+\addcontentsline{toc}{section}{Conclusion}
+
+The four patterns of this laboratory work are small but general. Producer / consumer is how pipelined work flows between any two long-running threads; in Unix, every \texttt{|} in the shell is a bounded buffer with exactly this protocol in the kernel. Condition variables are the generalisation of the signal semaphore from Lab 11, trading simplicity for the ability to wait on any predicate at the cost of handling spurious wakeups. Readers / writers formalises the common case where multiple consumers share read-only data --- the same pattern lives in the kernel as a read / write lock, and in every database as shared / exclusive locks. And the deadlock experiment showed that correctness in a concurrent program is a property of the whole set of lock-acquisition orders across the whole program, not of any single function --- a global rule, such as ``mutexes are always taken in the order of their address'', is the usual way to enforce it. The next laboratory work brings these ideas into the kernel: xv6 gains its own \texttt{sem\_init} / \texttt{sem\_down} / \texttt{sem\_up} syscalls built on \texttt{sleep\_prepare} and \texttt{wakeup}.
+
+\end{document}
