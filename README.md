@@ -19,5 +19,8 @@ Operating Systems laboratory works for the fall 2026 semester at the Technical U
 | [Lab8](./Lab8) | The Same Calls Inside Your Own OS (run, pingpong) | B (xv6) |
 | [Lab9](./Lab9) | Watching System Calls with strace | A (Linux) |
 | [Lab10](./Lab10) | Add Your Own System Call: trace | B (xv6) |
+| [Lab11](./Lab11) | Introduction to Threads and Semaphores | A (Linux) |
+| [Lab12](./Lab12) | Synchronisation Patterns: Producer–Consumer, Condition Variables, Readers–Writers, Deadlock | A (Linux) |
+| [Lab13](./Lab13) | Add Semaphores to xv6 | B (xv6) |
 
 Each lab folder contains a `REPORT.md` with the write-up for that lab, together with the shell scripts and C sources produced during the work.
